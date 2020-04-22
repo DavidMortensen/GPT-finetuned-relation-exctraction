@@ -3,11 +3,11 @@ import json
 import math
 import re
 import collections
+import warnings
 
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 
@@ -24,6 +24,24 @@ ACT_FNS = {
     'swish': swish,
     'gelu': gelu
 }
+
+
+class WordDropout(torch.nn.Module):
+    """
+    Implementation of word dropout. Randomly drops out entire words (or characters) in embedding space.
+    """
+    def __init__(self, dropout_rate=0.05):
+        super(WordDropout, self).__init__()
+        self.dropout_rate = dropout_rate
+
+    def forward(self, x):
+        if not self.training or not self.dropout_rate:
+            return x
+
+        m = x.data.new(1, x.size(1), 1).bernoulli_(1 - self.dropout_rate)
+        mask = torch.autograd.Variable(m, requires_grad=False)
+        mask = mask.expand_as(x)
+        return mask * x
 
 
 class LayerNorm(nn.Module):
@@ -84,11 +102,7 @@ class Attention(nn.Module):
         w = torch.matmul(q, k)
         if self.scale:
             w = w / math.sqrt(v.size(-1))
-        # w = w * self.b + -1e9 * (1 - self.b)  # TF implem method: mask_attn_weights
-        # XD: self.b may be larger than w, so we need to crop it
-        b = self.b[:, :, :w.size(-2), :w.size(-1)]
-        w = w * b + -1e9 * (1 - b)
-
+        w = w * self.b + -1e9 * (1 - self.b)  # TF implem method: mask_attn_weights
         w = nn.Softmax(dim=-1)(w)
         w = self.attn_dropout(w)
         return torch.matmul(w, v)
@@ -159,6 +173,7 @@ class TransformerModel(nn.Module):
         self.vocab = vocab
         self.embed = nn.Embedding(vocab, cfg.n_embd)
         self.drop = nn.Dropout(cfg.embd_pdrop)
+        self.word_drop = WordDropout(cfg.word_pdrop)
         block = Block(n_ctx, cfg, scale=True)
         self.h = nn.ModuleList([copy.deepcopy(block) for _ in range(cfg.n_layer)])
 
@@ -166,7 +181,8 @@ class TransformerModel(nn.Module):
 
     def forward(self, x):
         x = x.view(-1, x.size(-2), x.size(-1))
-        e = self.drop(self.embed(x))
+        x = self.word_drop(x)
+        e = self.embed(x)
         # Add the position information to the input embeddings
         h = e.sum(dim=2)
         for block in self.h:
@@ -177,18 +193,16 @@ class TransformerModel(nn.Module):
 class LMHead(nn.Module):
     """ Language Model Head for the transformer """
 
-    def __init__(self, model, cfg, trunc_and_reshape=True):
+    def __init__(self, model, cfg):
         super(LMHead, self).__init__()
         self.n_embd = cfg.n_embd
         embed_shape = model.embed.weight.shape
         self.decoder = nn.Linear(embed_shape[1], embed_shape[0], bias=False)
         self.decoder.weight = model.embed.weight # Tied weights
-        self.trunc_and_reshape = trunc_and_reshape  # XD
 
     def forward(self, h):
         # Truncated Language modeling logits (we remove the last token)
-        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd) \
-            if self.trunc_and_reshape else h  # XD
+        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd)
         lm_logits = self.decoder(h_trunc)
         return lm_logits
 
@@ -225,7 +239,6 @@ class MultipleChoiceHead(nn.Module):
 
 class ClfHead(nn.Module):
     """Classification Head for the transformer
-
     TODO: test this class."""
     def __init__(self, clf_token, cfg, n_class):
         super(ClfHead, self).__init__()
@@ -248,7 +261,6 @@ class ClfHead(nn.Module):
 
 class SimilarityHead(nn.Module):
     """ Similarity Head for the transformer
-
         TODO: test this class."""
     def __init__(self, clf_token, cfg):
         super(SimilarityHead, self).__init__()
@@ -270,33 +282,16 @@ class SimilarityHead(nn.Module):
 
         return sim_logits
 
-
-# XD
-class LMModel(nn.Module):
-    """ Transformer with language model head only """
-    def __init__(self, cfg, vocab=40990, n_ctx=512, return_probs=False):
-        super(LMModel, self).__init__()
-        self.transformer = TransformerModel(cfg, vocab=vocab, n_ctx=n_ctx)
-        self.lm_head = LMHead(self.transformer, cfg, trunc_and_reshape=False)
-        self.return_probs = return_probs
-        if self.return_probs:
-            pos_emb_mask = torch.zeros(1, 1, vocab)
-            pos_emb_mask[:, :, -n_ctx:] = -1e12
-            self.register_buffer('pos_emb_mask', pos_emb_mask)
-
-
-    def forward(self, x):
-        h = self.transformer(x)
-        lm_logits = self.lm_head(h)
-        if self.return_probs:
-            lm_logits = F.softmax(lm_logits + self.pos_emb_mask, dim=-1)
-        return lm_logits
-
-
 class DoubleHeadModel(nn.Module):
     """ Transformer with language model and task specific heads """
     def __init__(self, cfg, clf_token, task_head_type, vocab=40990, n_ctx=512):
         super(DoubleHeadModel, self).__init__()
+        self.cfg = cfg
+        self.clf_token = clf_token
+        self.task_head_type = task_head_type
+        self.vocab = vocab
+        self.n_ctx = n_ctx
+
         self.transformer = TransformerModel(cfg, vocab=vocab, n_ctx=n_ctx)
         self.lm_head = LMHead(self.transformer, cfg)
         if isinstance(task_head_type, str):
@@ -326,6 +321,51 @@ class DoubleHeadModel(nn.Module):
         task_logits = self.task_head(h, x)
 
         return lm_logits, task_logits
+
+
+    def save_to_file(self, model_file: str):
+        """
+        Saves the current model to the provided file.
+        :param model_file: the model file
+        """
+        model_state = {
+            'state_dict': self.state_dict(),
+            'cfg': dict(self.cfg),
+            'clf_token': self.clf_token,
+            'task_head_type': self.task_head_type,
+            'vocab': self.vocab,
+            'n_ctx': self.n_ctx
+        }
+        torch.save(model_state, model_file, pickle_protocol=4)
+
+    @classmethod
+    def load_from_file(cls, model_file):
+        """
+        Loads the model from the given file.
+        :param model_file: the model file
+        :return: the loaded text classifier model
+        """
+
+        # ATTENTION: suppressing torch serialization warnings. This needs to be taken out once we sort out recursive
+        # serialization of torch objects
+        warnings.filterwarnings("ignore")
+        if torch.cuda.is_available():
+            state = torch.load(model_file)
+        else:
+            state = torch.load(model_file, map_location={'cuda:0': 'cpu'})
+        warnings.filterwarnings("default")
+
+        model = DoubleHeadModel(
+            cfg=dotdict(state['cfg']),
+            clf_token=state['clf_token'],
+            task_head_type=state['task_head_type'],
+            vocab=state['vocab'],
+            n_ctx=state['n_ctx']
+        )
+
+        model.load_state_dict(state['state_dict'])
+        model.eval()
+        return model
 
 
 def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n_embd=768, path='./model/',
