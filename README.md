@@ -1,5 +1,5 @@
 # GPT-finetuned-relation-exctraction
-Improving Relationship Extraction with pre-trained Transformer Language Models (Open AI GPT)
+Improving Relationship Extraction with pre-trained Transformer Language Models (Open AI GPT). Most code are directly taken from the work of Huggingface's reimplementation of the OpenAI GPT.
 
 ## Installation
 
@@ -11,7 +11,7 @@ Clone repo to local and then download the weights of the OpenAI pre-trained Tran
 
 ## Preperation of the data
 
-The SemEval data is already correctly formated in the repo, however, the tacred dataset can be downloaded from LDC (https://catalog.ldc.upenn.edu/LDC2018T24) and will need to be formated using: 
+The tacred dataset can be downloaded from LDC (https://catalog.ldc.upenn.edu/LDC2018T24) and will need to be formated using: 
 ```bash
 python data_converter.py <DATASET DIR> <CONVERTED DATASET DIR>
 ```
