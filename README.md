@@ -45,9 +45,9 @@ Edit the paths accordingly to the directories of the files.
 python re_model.py evaluate \
   --dataset tacred \
   --masking_mode grammar_and_ner \
-  --test_file /content/drive/My\ Drive/Colab\ Notebooks/GPT-finetuned-relation-exctraction/tacred_data/test.jsonl \
-  --save_dir /content/drive/My\ Drive/Colab\ Notebooks/GPT-finetuned-relation-exctraction/logs/2020-05-10__14-47__764220/models/ \
-  --model_file /content/drive/My\ Drive/Colab\ Notebooks/GPT-finetuned-relation-exctraction/logs/2020-05-10__14-47__764220/models/model_epoch-3_dev-macro-f1-0.5660020089794017_dev-loss-4.859414281470467_2020-05-10__14-47__764220.pt \
+  --test_file /GPT-finetuned-relation-exctraction/tacred_data/test.jsonl \
+  --save_dir /GPT-finetuned-relation-exctraction/logs/2020-05-10__14-47__764220/models/ \
+  --model_file /GPT-finetuned-relation-exctraction/logs/2020-05-10__14-47__764220/models/model_epoch-3_dev-macro-f1-0.5660020089794017_dev-loss-4.859414281470467_2020-05-10__14-47__764220.pt \
   --batch_size 8 \
   --log_dir ./logs/
 ```
