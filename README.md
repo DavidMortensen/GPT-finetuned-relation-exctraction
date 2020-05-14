@@ -34,6 +34,10 @@ python re_model.py train \
   --seed=0 \
   --log-dir ./logs/
 ```
+
+## Model Evaluation
+The best model found in the research is supplied in the hand-in and can be run using the below script
+
 ## Model Evaluation
 
 Edit the paths accordingly to the directories of the files. 
